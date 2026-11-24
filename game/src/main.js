@@ -40,8 +40,15 @@ const shotInput = {
   mouse: { down: false, dx: 0, dy: 0 },
 };
 
-const { world, update } = createWorld(renderer, shot ? shotInput : input, hud, audio, rng);
-window.__game = { world, renderer, hud, audio };
+let world;
+let update;
+function buildWorld() {
+  const created = createWorld(renderer, shot ? shotInput : input, hud, audio, rng);
+  world = created.world;
+  update = created.update;
+  window.__game = { world, renderer, hud, audio };
+}
+buildWorld();
 
 function announce(message) {
   status.textContent = message;
@@ -84,13 +91,31 @@ function runGame() {
     announce('Playing. Drive with WASD, E to enter a car, F to shoot.');
   }
 
+  // Restart in place, with no page reload: drop every object the old
+  // world added to the scene (the renderer's three lights are the only
+  // lights in the scene, so they stay), then build a fresh world on the
+  // same renderer, HUD, audio and input and resume play as a new game.
+  function restartInPlace() {
+    audio.ensure();
+    try { window.localStorage.removeItem('solmar-bay-v2-save'); } catch { /* ignore */ }
+    for (const child of [...renderer.scene.children]) {
+      if (!child.isLight) renderer.scene.remove(child);
+    }
+    buildWorld();
+    world.cash = 200;
+    screen = 'play';
+    hud.setScreen(null);
+    hud.setDialogue(null);
+    announce('Playing. Drive with WASD, E to enter a car, F to shoot.');
+  }
+
   hud.onNew(() => startGame(true));
   hud.onContinue(() => startGame(false));
   hud.onResume(() => {
     screen = 'play';
     hud.setScreen(null);
   });
-  hud.onRestart(() => window.location.reload());
+  hud.onRestart(() => restartInPlace());
   canvas.addEventListener('mousedown', () => audio.ensure());
 
   function frame(now) {

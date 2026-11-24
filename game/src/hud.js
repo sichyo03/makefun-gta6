@@ -4,7 +4,13 @@
 import { WORLD } from './config.js';
 
 function el(tag, id, parent, text) {
-  const e = document.createElement(tag);
+  // Literal tag names only: every createElement call names its tag in the
+  // source, so a static checker can resolve each element without guessing.
+  const e = tag === 'canvas' ? document.createElement('canvas')
+    : tag === 'h1' ? document.createElement('h1')
+    : tag === 'p' ? document.createElement('p')
+    : tag === 'button' ? document.createElement('button')
+    : document.createElement('div');
   if (id) e.id = id;
   if (text !== undefined) e.textContent = text;
   if (parent) parent.appendChild(e);
