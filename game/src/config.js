@@ -1,91 +1,65 @@
-// Solmar Bay — every tuning number, colour and layout constant in one place.
-// The city is a street grid: streets run at x/z = -224, -160, -96, -32, 32, 96, 160, 224,
-// each 14 wide, with building blocks between them. The beach is south (z > 256), the
-// docks are east (x > 256). All distances are metres; the simulation steps at 1/60 s.
+// Solmar Bay v2 — shared tuning and constants for the whole game.
+// One place for every number the systems agree on: city size, speeds,
+// wanted rules, weapons, payouts. Nothing here imports three.js.
+export const WORLD = {
+  blocks: 10, // city is a 10x10 grid of blocks
+  blockPitch: 46, // block (36) + road (10)
+  blockSize: 36,
+  roadWidth: 10,
+  // city spans -230..230; beach south (z > 230), docks east (x > 230)
+  half: 230,
+  beachZ: 252,
+  dockX: 252,
+  waterLevel: 0.4,
+};
 
-export const STEP = 1 / 60;
-
-export const CITY = {
-  half: 288,
-  streetSpacing: 64,
-  streetWidth: 14,
-  streets: [-224, -160, -96, -32, 32, 96, 160, 224],
-  blockHalf: 25,
-  beachZ: 256,
-  docksX: 256,
+export const COLOURS = {
+  skyDay: 0x8ec9ee,
+  skyDusk: 0xff9a5c,
+  skyNight: 0x0b1026,
+  sunDay: 0xfff2d8,
+  ground: 0x3a3f45,
+  road: 0x23262b,
+  sidewalk: 0x8a8f96,
+  sand: 0xe8d29a,
+  water: 0x1d6f8f,
+  grass: 0x4d8a4a,
 };
 
 export const PLAYER = {
-  radius: 0.6,
-  walkSpeed: 7,
-  runSpeed: 11.5,
-  health: 100,
-  turnSpeed: 9,
+  walkSpeed: 7.5,
+  sprintSpeed: 11,
+  radius: 0.9,
+  maxHealth: 100,
+  interactRange: 4.5,
 };
 
 export const CAR = {
-  accel: 17,
-  brake: 34,
-  maxSpeed: 38,
+  accel: 16,
+  brake: 30,
+  maxSpeed: 38, // sport car
   maxReverse: 12,
-  steer: 0.55,
-  grip: 5.5,
-  length: 4.4,
-  width: 2.0,
-  health: 100,
+  turnRate: 2.1,
+  radius: 2.2,
 };
-
-export const TRAFFIC_COUNT = 14;
-export const PED_COUNT = 22;
 
 export const WANTED = {
-  max: 5,
-  decayDelay: 18,
-  decayInterval: 12,
-  policeCars: [0, 1, 2, 2, 3, 4],
-  // seconds a cop must stay touching the player on foot before the bust lands
-  bustTime: 2.5,
+  decayPerSecond: 0.06, // stars fall slowly when unseen
+  stealCar: 1,
+  shootCop: 2,
+  killPed: 1,
+  killCop: 2,
+  maxStars: 5,
 };
 
-export const MISSIONS = [
-  { id: 'meet', title: 'Meet Mama Rosa', reward: 500 },
-  { id: 'steal', title: 'Steal the Getaway', reward: 800 },
-  { id: 'lose', title: 'Lose the Heat', reward: 1200 },
-  { id: 'deliver', title: 'The Docks Run', reward: 2000 },
-];
-
-export const PALETTE = {
-  sky: '#ffb36b',
-  skyTop: '#7ec8e3',
-  fog: '#f7b98a',
-  ground: '#3d3a38',
-  asphalt: '#33302e',
-  sidewalk: '#8d8578',
-  sand: '#e8cf9a',
-  water: '#2e7f9e',
-  grass: '#5d8a4a',
-  building: ['#c98f6b', '#b8a88f', '#8fa3b8', '#a87f6d', '#7d8a6d', '#c9b18a'],
-  windowLit: '#ffd98a',
-  windowDark: '#2c3440',
-  player: '#2f7fd0',
-  police: '#1c2733',
-  taxi: '#f2c230',
-  hudText: '#ffffff',
-  hudPanel: 'rgba(12, 14, 20, 0.62)',
-  wanted: '#ffcf3d',
-  marker: '#ffd21f',
+export const WEAPONS = {
+  pistol: { name: 'Pistol', damage: 34, rate: 0.28, spread: 0.012, range: 70, mag: 12, reload: 1.1, auto: false, pellets: 1, kick: 0.6 },
+  smg: { name: 'SMG', damage: 16, rate: 0.085, spread: 0.05, range: 48, mag: 32, reload: 1.4, auto: true, pellets: 1, kick: 0.35 },
+  shotgun: { name: 'Shotgun', damage: 13, rate: 0.95, spread: 0.11, range: 26, mag: 6, reload: 2.1, auto: false, pellets: 6, kick: 1.4 },
 };
 
-export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
+export const MISSION_PAYOUTS = [500, 800, 1200, 2000, 2500, 3000, 3500, 3000, 4000, 10000];
 
-/** Where the save lives between visits (this browser only). */
-export const SAVE_KEY = 'solmar-bay.save.v1';
-
-/** The city is Solmar Bay. The player is Dario Venn, a driver fresh out of the
- *  county lockup. The fixer is Mama Rosa. None of these names, places or the
- *  story below come from any commercial game. */
-export const STORY = {
-  city: 'Solmar Bay',
-  player: 'Dario Venn',
-  fixer: 'Mama Rosa',
-};
+export const SAVE_KEY = 'solmar-bay-v2-save';
+export const BEST_KEY = 'solmar-bay-v2-best';
+export const STEP = 1 / 60;

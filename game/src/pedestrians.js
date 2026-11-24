@@ -1,142 +1,85 @@
-// Pedestrians: low-poly walkers on the sidewalks, each with a home loop between
-// two street corners. They stroll, wait at corners, and flee screaming from
-// gunfire, car crashes and the player at speed. A hit pedestrian goes down.
-
-import { CITY } from './config.js';
-import { pick, range } from './random.js';
-import { collideCircle } from './city.js';
+// Solmar Bay v2 — pedestrians: people walking the sidewalks, fleeing from
+// gunfire and police chases, and wandering the park and beach.
+import { range, pick } from './random.js';
 
 const THREE = window.THREE;
 
-const SHIRTS = ['#c95f4a', '#4a7fc9', '#5aa84f', '#c9a13a', '#8a5aa8', '#d8d8d8', '#3a3a3a', '#e08a5a'];
-const PANTS = ['#2c3242', '#4a3a2c', '#3a4a3a', '#22262b'];
+const SHIRT_COLORS = [0xd8d8d8, 0x3a6bd8, 0xd83a6b, 0x3ad86b, 0xe8a03a, 0x8a5ad8, 0x3a3a3a];
 
-function createPedMesh(shirtColor, pantsColor) {
-  const group = new THREE.Group();
-  const skin = new THREE.MeshLambertMaterial({ color: pickShirtSkin() });
-  const shirt = new THREE.MeshLambertMaterial({ color: shirtColor });
-  const pants = new THREE.MeshLambertMaterial({ color: pantsColor });
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.66, 0.32), shirt);
-  torso.position.y = 1.05;
-  group.add(torso);
-  const head = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.36, 0.34), skin);
-  head.position.y = 1.6;
-  group.add(head);
-  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.68, 0.24), pants);
-  legL.position.set(-0.14, 0.34, 0);
-  group.add(legL);
-  const legR = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.68, 0.24), pants);
-  legR.position.set(0.14, 0.34, 0);
-  group.add(legR);
-  group.traverse((m) => {
-    if (m.isMesh) m.castShadow = true;
-  });
-  return { group, legL, legR, shirt };
+function makePedMesh(color) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.85, 1.0, 0.5),
+    new THREE.MeshLambertMaterial({ color }),
+  );
+  body.position.y = 1.1;
+  g.add(body);
+  const head = new THREE.Mesh(
+    new THREE.BoxGeometry(0.48, 0.48, 0.48),
+    new THREE.MeshLambertMaterial({ color: 0xd8a078 }),
+  );
+  head.position.y = 1.9;
+  g.add(head);
+  const legMat = new THREE.MeshLambertMaterial({ color: 0x2a2a33 });
+  for (const sx of [-0.2, 0.2]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.8, 0.34), legMat);
+    leg.position.set(sx, 0.42, 0);
+    leg.name = sx < 0 ? 'legL' : 'legR';
+    g.add(leg);
+  }
+  return g;
 }
 
-// Skin tones vary; the pick is per-pedestrian, not per file.
-const SKINS = ['#c98d64', '#8a5a38', '#e8b88a', '#6b4423', '#d8a075'];
-function pickShirtSkin() {
-  return SKINS[Math.floor(Math.random() * SKINS.length)];
-}
-
-export function createPedestrians(random, city) {
+export function createPedestrians(scene, rng, count) {
   const peds = [];
-  for (let i = 0; i < 22; i += 1) {
-    const street = pick(random, CITY.streets);
-    const along = range(random, -224, 224);
-    const onX = random() < 0.5;
-    const x = onX ? along : street + 8.5;
-    const z = onX ? street + 8.5 : along;
-    const mesh = createPedMesh(pick(random, SHIRTS), pick(random, PANTS));
-    mesh.group.position.set(x, 0, z);
+  for (let i = 0; i < count; i += 1) {
+    const mesh = makePedMesh(pick(rng, SHIRT_COLORS));
+    const x = range(rng, -220, 220);
+    const z = range(rng, -220, 220);
+    mesh.position.set(x, 0, z);
+    scene.add(mesh);
     peds.push({
-      mesh,
-      x,
-      z,
-      yaw: range(random, 0, Math.PI * 2),
-      speed: range(random, 1.2, 2.2),
-      target: null,
-      state: 'walk',
-      downTimer: 0,
-      waitTimer: range(random, 0, 4),
-      phase: range(random, 0, Math.PI * 2),
+      mesh, x, z,
+      heading: rng() * Math.PI * 2,
+      speed: range(rng, 1.2, 2.4),
+      health: 30,
+      radius: 0.9,
+      kind: 'ped',
+      y: 1.2,
+      fleeing: 0,
+      phase: rng() * Math.PI * 2,
+      dead: false,
     });
   }
   return peds;
 }
 
-/** Pick a new corner to walk to: a random street crossing near the pedestrian. */
-function newTarget(ped, random) {
-  const street = pick(random, CITY.streets);
-  const along = range(random, -224, 224);
-  if (random() < 0.5) return { x: along, z: street + 8.5 };
-  return { x: street + 8.5, z: along };
-}
-
-export function stepPedestrians(peds, city, threat, dt, random) {
-  for (const ped of peds) {
-    if (ped.state === 'down') {
-      ped.downTimer -= dt;
-      ped.mesh.group.rotation.x = Math.min(Math.PI / 2, ped.mesh.group.rotation.x + dt * 4);
-      if (ped.downTimer <= 0) {
-        ped.state = 'walk';
-        ped.mesh.group.rotation.x = 0;
-      }
-      continue;
-    }
-    // Flee from a nearby threat (gunfire, a speeding car, a police chase).
-    let fleeX = 0;
-    let fleeZ = 0;
-    if (threat && threat.active) {
-      const dx = ped.x - threat.x;
-      const dz = ped.z - threat.z;
-      const d = Math.hypot(dx, dz);
-      if (d < 26) {
-        fleeX = dx / (d || 1);
-        fleeZ = dz / (d || 1);
-      }
-    }
-    if (fleeX !== 0 || fleeZ !== 0) {
-      ped.state = 'flee';
-      ped.yaw = Math.atan2(fleeX, fleeZ);
-      ped.x += fleeX * 4.5 * dt;
-      ped.z += fleeZ * 4.5 * dt;
-      ped.phase += dt * 9;
+export function updatePedestrians(peds, dt, playerPos, danger) {
+  for (const p of peds) {
+    if (p.dead) continue;
+    const dx = p.x - playerPos.x;
+    const dz = p.z - playerPos.z;
+    const dist = Math.hypot(dx, dz) || 1;
+    if (danger && dist < 26) p.fleeing = 2.5;
+    if (p.fleeing > 0) {
+      p.fleeing -= dt;
+      p.heading = Math.atan2(dx, dz);
+      p.speed = 5.5;
     } else {
-      if (ped.state === 'flee') ped.state = 'walk';
-      if (ped.waitTimer > 0) {
-        ped.waitTimer -= dt;
-      } else {
-        if (!ped.target) ped.target = newTarget(ped, random);
-        const dx = ped.target.x - ped.x;
-        const dz = ped.target.z - ped.z;
-        const d = Math.hypot(dx, dz);
-        if (d < 1.5) {
-          ped.target = null;
-          ped.waitTimer = range(random, 1, 5);
-        } else {
-          ped.yaw = Math.atan2(dx, dz);
-          ped.x += (dx / d) * ped.speed * dt;
-          ped.z += (dz / d) * ped.speed * dt;
-          ped.phase += dt * ped.speed * 2.4;
-        }
-      }
+      p.speed = 1.8;
+      if (Math.random() < dt * 0.1) p.heading += (Math.random() - 0.5) * 1.2;
     }
-    const pushed = collideCircle(city, ped.x, ped.z, 0.5);
-    ped.x = pushed.x;
-    ped.z = pushed.z;
-    const swing = ped.state === 'walk' || ped.state === 'flee' ? Math.sin(ped.phase) * 0.5 : 0;
-    ped.mesh.legL.rotation.x = swing;
-    ped.mesh.legR.rotation.x = -swing;
-    ped.mesh.group.position.set(ped.x, 0, ped.z);
-    ped.mesh.group.rotation.y = ped.yaw;
+    p.x += Math.sin(p.heading) * p.speed * dt;
+    p.z += Math.cos(p.heading) * p.speed * dt;
+    p.x = Math.max(-240, Math.min(240, p.x));
+    p.z = Math.max(-240, Math.min(290, p.z));
+    p.phase += dt * p.speed * 2.2;
+    const swing = Math.sin(p.phase) * 0.45;
+    p.mesh.position.set(p.x, 0, p.z);
+    p.mesh.rotation.y = p.heading;
+    const legL = p.mesh.getObjectByName('legL');
+    const legR = p.mesh.getObjectByName('legR');
+    if (legL) legL.rotation.x = swing;
+    if (legR) legR.rotation.x = -swing;
   }
-}
-
-/** Knock a pedestrian down (a hit, a hard shove, a crash). */
-export function knockDown(ped) {
-  if (ped.state === 'down') return;
-  ped.state = 'down';
-  ped.downTimer = 6;
 }

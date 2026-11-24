@@ -1,155 +1,213 @@
-// The HUD: DOM panels for cash, health, wanted stars, objective and dialogue,
-// plus a live minimap drawn on a small canvas — roads, buildings, the player,
-// traffic, police and the mission marker, north-up. The module only reads the
-// world state and paints; it owns no game rules.
+// Solmar Bay v2 — the HUD: cash, health, wanted stars, weapon and ammo,
+// objective, radio, speed, a live minimap, dialogue, toasts, damage flash,
+// and the title / pause / game-over screens. All DOM, crisp at any size.
+import { WORLD } from './config.js';
 
-import { CITY, PALETTE } from './config.js';
-import { currentDialogue } from './missions.js';
-
-const MAP_SIZE = 190;
-const WORLD_SPAN = CITY.half * 2 + 80;
-
-function worldToMap(x, z) {
-  const s = MAP_SIZE / WORLD_SPAN;
-  return { x: (x + WORLD_SPAN / 2) * s, y: (z + WORLD_SPAN / 2) * s };
+function el(tag, id, parent, text) {
+  const e = document.createElement(tag);
+  if (id) e.id = id;
+  if (text !== undefined) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
 }
 
-export function createHud(elements, city) {
-  const ctx = elements.minimap.getContext('2d');
-  let lastObjective = '';
-  let lastCash = -1;
-  let lastHealth = -1;
-  let lastWanted = -1;
-  let lastSpeed = -1;
-  let lastDialogue = '';
+export function createHUD() {
+  const root = document.getElementById('hud');
+  const topLeft = el('div', 'hud-topleft', root);
+  const cash = el('div', 'hud-cash', topLeft, '$0');
+  const objective = el('div', 'hud-objective', topLeft, '');
+  const clock = el('div', 'hud-clock', topLeft, '');
+  const topRight = el('div', 'hud-topright', root);
+  const stars = el('div', 'hud-stars', topRight, '');
+  const healthWrap = el('div', 'hud-health', topRight);
+  const healthBar = el('div', 'hud-healthbar', healthWrap);
+  const weapon = el('div', 'hud-weapon', topRight, '');
+  const bottomLeft = el('div', 'hud-bottomleft', root);
+  const speed = el('div', 'hud-speed', bottomLeft, '');
+  const radio = el('div', 'hud-radio', bottomLeft, '');
+  const minimap = el('canvas', 'hud-minimap', root);
+  minimap.width = 176;
+  minimap.height = 176;
+  const crosshair = el('div', 'hud-crosshair', root, '+');
+  const toast = el('div', 'hud-toast', root, '');
+  const dialogue = el('div', 'hud-dialogue', root);
+  const dlgWho = el('div', 'hud-dlgwho', dialogue, '');
+  const dlgText = el('div', 'hud-dlgtext', dialogue, '');
+  el('div', 'hud-dlghint', dialogue, 'E ▸ lanjut');
+  const vignette = el('div', 'hud-vignette', root);
+  dialogue.style.display = 'none';
 
-  function drawMinimap(state) {
-    const s = MAP_SIZE / WORLD_SPAN;
-    ctx.fillStyle = '#10141a';
-    ctx.fillRect(0, 0, MAP_SIZE, MAP_SIZE);
-    // Beach and water along the south edge.
-    ctx.fillStyle = '#e8cf9a';
-    ctx.fillRect(0, worldToMap(0, CITY.beachZ).y, MAP_SIZE, MAP_SIZE);
-    ctx.fillStyle = '#2e7f9e';
-    ctx.fillRect(0, worldToMap(0, CITY.beachZ + 64).y, MAP_SIZE, MAP_SIZE);
-    // Roads.
-    ctx.strokeStyle = '#555049';
-    ctx.lineWidth = Math.max(2, CITY.streetWidth * s);
-    for (const street of CITY.streets) {
-      const a = worldToMap(-WORLD_SPAN / 2, street);
-      const b = worldToMap(WORLD_SPAN / 2, street);
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.stroke();
-      const c = worldToMap(street, -WORLD_SPAN / 2);
-      const d = worldToMap(street, WORLD_SPAN / 2);
-      ctx.beginPath();
-      ctx.moveTo(c.x, c.y);
-      ctx.lineTo(d.x, d.y);
-      ctx.stroke();
-    }
-    // Buildings.
-    ctx.fillStyle = '#3a3f4a';
-    for (const b of city.buildings) {
-      const p = worldToMap(b.x - b.w / 2, b.z - b.d / 2);
-      ctx.fillRect(p.x, p.y, Math.max(2, b.w * s), Math.max(2, b.d * s));
-    }
-    // Mission marker.
-    if (state.missions.marker) {
-      const m = worldToMap(state.missions.marker.x, state.missions.marker.z);
-      ctx.fillStyle = PALETTE.marker;
-      ctx.beginPath();
-      ctx.arc(m.x, m.y, 6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = '#111';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-    // Traffic (white), police (blue), player (arrow).
-    for (const car of state.cars) {
-      if (car.dead) continue;
-      const p = worldToMap(car.x, car.z);
-      ctx.fillStyle = car.kind === 'police' ? '#4aa3ff' : car === state.player.car ? '#37d67a' : '#dddddd';
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, car.kind === 'police' ? 4 : 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    for (const ped of state.peds) {
-      if (ped.state === 'down') continue;
-      const p = worldToMap(ped.x, ped.z);
-      ctx.fillStyle = '#8b93a3';
-      ctx.fillRect(p.x - 1, p.y - 1, 2, 2);
-    }
-    const pp = worldToMap(state.player.x, state.player.z);
-    ctx.save();
-    ctx.translate(pp.x, pp.y);
-    ctx.rotate(state.player.onFoot ? state.player.yaw : state.player.car ? state.player.car.yaw : 0);
-    ctx.fillStyle = '#37d67a';
-    ctx.beginPath();
-    ctx.moveTo(0, -7);
-    ctx.lineTo(5, 5);
-    ctx.lineTo(-5, 5);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
+  // Screens.
+  const title = el('div', 'screen-title', root);
+  el('h1', null, title, 'SOLMAR BAY');
+  el('p', 'screen-sub', title, 'An original open-world crime game — drive, steal, outrun the Bay Police, run jobs for Mama Rosa.');
+  const btnNew = el('button', 'btn-new', title, 'New Game');
+  const btnContinue = el('button', 'btn-continue', title, 'Continue');
+  el('p', 'screen-controls', title, 'WASD move/drive · Mouse drag camera · E enter car / talk · F or click shoot · 1/2/3 weapons · R reload · C radio · Shift sprint · P pause');
+  const pause = el('div', 'screen-pause', root);
+  el('h1', null, pause, 'PAUSED');
+  const btnResume = el('button', 'btn-resume', pause, 'Resume');
+  const over = el('div', 'screen-over', root);
+  const overTitle = el('h1', null, over, 'WASTED');
+  const overText = el('p', null, over, '');
+  const btnRestart = el('button', 'btn-restart', over, 'Try Again');
+
+  let toastTimer = 0;
+  let flashTimer = 0;
+
+  function showToast(text) {
+    toast.textContent = text;
+    toast.style.opacity = '1';
+    toastTimer = 2.6;
   }
 
-  function setText(el, value, last) {
-    if (value !== last) el.textContent = value;
-    return value;
+  function flash() {
+    vignette.style.opacity = '0.55';
+    flashTimer = 0.35;
+  }
+
+  function drawMinimap(world) {
+    const g = minimap.getContext('2d');
+    const S = 176;
+    const scale = S / 560;
+    const ox = S / 2;
+    const oz = S / 2 + 8;
+    const px = (x) => ox + x * scale;
+    const pz = (z) => oz + z * scale;
+    g.clearRect(0, 0, S, S);
+    g.fillStyle = '#10141a';
+    g.fillRect(0, 0, S, S);
+    // Water and sand.
+    g.fillStyle = '#1d6f8f';
+    g.fillRect(0, pz(232), S, S - pz(232));
+    g.fillRect(px(232), 0, S - px(232), S);
+    g.fillStyle = '#e8d29a';
+    g.fillRect(0, pz(232), S, 6);
+    // Park.
+    g.fillStyle = '#2f6b2f';
+    g.fillRect(px(-46), pz(-46), 92 * scale, 92 * scale);
+    // Roads.
+    g.strokeStyle = '#4a4f57';
+    g.lineWidth = 4;
+    const pitch = WORLD.blockPitch;
+    for (let i = 0; i <= WORLD.blocks; i += 1) {
+      const c = -WORLD.half + i * pitch - pitch / 2 + WORLD.blockSize / 2 + WORLD.roadWidth / 2;
+      g.beginPath(); g.moveTo(px(c), 0); g.lineTo(px(c), S); g.stroke();
+      g.beginPath(); g.moveTo(0, pz(c)); g.lineTo(S, pz(c)); g.stroke();
+    }
+    // Buildings.
+    g.fillStyle = '#7a7f87';
+    for (const b of world.city.buildings) {
+      g.fillRect(px(b.x - b.hx), pz(b.z - b.hz), b.hx * 2 * scale, b.hz * 2 * scale);
+    }
+    // Packages.
+    g.fillStyle = '#2aff66';
+    for (const pkg of world.missions.state.packages) {
+      if (!pkg.found) g.fillRect(px(pkg.x) - 2, pz(pkg.z) - 2, 4, 4);
+    }
+    // Police.
+    g.fillStyle = '#3a6bff';
+    for (const c of world.police.cars) g.fillRect(px(c.x) - 2, pz(c.z) - 2, 4, 4);
+    for (const c of world.police.cops) g.fillRect(px(c.x) - 2, pz(c.z) - 2, 4, 4);
+    if (world.police.heli) {
+      g.fillStyle = '#ff5a5a';
+      g.fillRect(px(world.police.heli.mesh.position.x) - 3, pz(world.police.heli.mesh.position.z) - 3, 6, 6);
+    }
+    // Mission marker (pulsing diamond).
+    const mk = world.missions.state.marker || world.missions.state.taxiMarker;
+    if (mk) {
+      const t = performance.now() / 300;
+      g.fillStyle = Math.sin(t) > 0 ? '#ffd81a' : '#ff9a1a';
+      g.beginPath();
+      g.moveTo(px(mk.x), pz(mk.z) - 6);
+      g.lineTo(px(mk.x) + 5, pz(mk.z));
+      g.lineTo(px(mk.x), pz(mk.z) + 6);
+      g.lineTo(px(mk.x) - 5, pz(mk.z));
+      g.closePath();
+      g.fill();
+    }
+    // Player arrow.
+    const p = world.player;
+    const pxx = p.vehicle ? p.vehicle.x : p.x;
+    const pzz = p.vehicle ? p.vehicle.z : p.z;
+    const heading = p.vehicle ? p.vehicle.heading : p.heading;
+    g.fillStyle = '#2aff66';
+    g.beginPath();
+    g.moveTo(px(pxx) + Math.sin(heading) * 7, pz(pzz) + Math.cos(heading) * 7);
+    g.lineTo(px(pxx) + Math.sin(heading + 2.6) * 5, pz(pzz) + Math.cos(heading + 2.6) * 5);
+    g.lineTo(px(pxx) + Math.sin(heading - 2.6) * 5, pz(pzz) + Math.cos(heading - 2.6) * 5);
+    g.closePath();
+    g.fill();
+    // North tick.
+    g.fillStyle = '#ffffff';
+    g.font = 'bold 11px sans-serif';
+    g.fillText('N', 4, 12);
+  }
+
+  function update(world, dt) {
+    cash.textContent = `$${world.cash.toLocaleString('en-US')}`;
+    objective.textContent = world.missions.state.objective;
+    const day = world.dayTime;
+    const hh = Math.floor(((day * 24 + 6) % 24));
+    const mm = Math.floor((((day * 24 + 6) % 1) * 60));
+    clock.textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}  ·  ${world.missions.state.next}/${world.missions.MISSIONS.length} jobs`;
+    const w = world.police.wanted;
+    stars.textContent = '★'.repeat(w) + '☆'.repeat(5 - w);
+    stars.style.color = w >= 4 ? '#ff3a3a' : w >= 2 ? '#ffb13a' : '#ffd81a';
+    healthBar.style.width = `${Math.max(0, world.player.health)}%`;
+    healthBar.style.background = world.player.health > 50 ? '#2aff66' : world.player.health > 25 ? '#ffb13a' : '#ff3a3a';
+    const ld = world.loadout;
+    const wdef = world.weapons[ld.current];
+    const reloading = ld.reloading > 0 ? ' — reloading…' : '';
+    weapon.textContent = `${wdef.name}  ${ld.inMag[ld.current]} / ${ld.ammo[ld.current]}${reloading}`;
+    const p = world.player;
+    if (p.vehicle) {
+      const kmh = Math.round(Math.abs(p.vehicle.speed) * 3.2);
+      speed.textContent = `${kmh} km/h · ${p.vehicle.def.name}`;
+    } else {
+      speed.textContent = 'On foot';
+    }
+    radio.textContent = `♪ ${world.audio.stationName()}`;
+    crosshair.style.opacity = world.player.onFoot ? '1' : '0';
+    if (toastTimer > 0) {
+      toastTimer -= dt;
+      if (toastTimer <= 0) toast.style.opacity = '0';
+    }
+    if (flashTimer > 0) {
+      flashTimer -= dt;
+      vignette.style.opacity = String(Math.max(0, flashTimer / 0.35) * 0.55);
+    }
+    drawMinimap(world);
+  }
+
+  function setDialogue(line) {
+    if (!line) {
+      dialogue.style.display = 'none';
+      return;
+    }
+    dialogue.style.display = 'block';
+    dlgWho.textContent = line.who;
+    dlgText.textContent = line.text;
+  }
+
+  function setScreen(name, data) {
+    title.style.display = name === 'title' ? 'flex' : 'none';
+    pause.style.display = name === 'pause' ? 'flex' : 'none';
+    over.style.display = name === 'over' ? 'flex' : 'none';
+    if (name === 'title') {
+      btnContinue.style.display = data && data.hasSave ? 'block' : 'none';
+    }
+    if (name === 'over' && data) {
+      overTitle.textContent = data.title;
+      overText.textContent = data.text;
+    }
   }
 
   return {
-    /** Paint one frame of HUD from the world state. Cheap: text only on change. */
-    update(state, screen) {
-      const p = state.player;
-      lastCash = setText(elements.cash, `$${state.cash.toLocaleString('en-US')}`, lastCash);
-      const health = Math.max(0, Math.round(p.health));
-      if (health !== lastHealth) {
-        lastHealth = health;
-        elements.healthFill.style.width = `${health}%`;
-        elements.healthFill.style.background = health > 50 ? '#37d67a' : health > 25 ? '#f2c230' : '#e5534b';
-        elements.healthText.textContent = `${health}`;
-      }
-      if (state.wanted !== lastWanted) {
-        lastWanted = state.wanted;
-        let stars = '';
-        for (let i = 0; i < 5; i += 1) stars += i < state.wanted ? '★' : '☆';
-        elements.wanted.textContent = stars;
-        elements.wanted.style.opacity = state.wanted > 0 ? '1' : '0.35';
-      }
-      const objective = state.missions.objective;
-      if (objective !== lastObjective) {
-        lastObjective = objective;
-        elements.objective.textContent = objective;
-      }
-      if (state.missions.marker) {
-        const d = Math.hypot(p.x - state.missions.marker.x, p.z - state.missions.marker.z);
-        const dist = `${Math.round(d)}m`;
-        if (dist !== elements.distance.textContent) elements.distance.textContent = dist;
-      } else {
-        elements.distance.textContent = '';
-      }
-      const speed = p.car ? Math.round(Math.abs(p.car.speed) * 3.6) : 0;
-      if (speed !== lastSpeed) {
-        lastSpeed = speed;
-        elements.speed.textContent = p.car ? `${speed} km/h` : '';
-      }
-      elements.crosshair.style.display = p.onFoot && p.armed && screen === 'play' ? 'block' : 'none';
-      const line = currentDialogue(state.missions);
-      const dialogue = line ? `${line[0]}: ${line[1]}` : '';
-      if (dialogue !== lastDialogue) {
-        lastDialogue = dialogue;
-        if (line) {
-          elements.dialogue.style.display = 'block';
-          elements.dialogueName.textContent = line[0];
-          elements.dialogueText.textContent = line[1];
-        } else {
-          elements.dialogue.style.display = 'none';
-        }
-      }
-      drawMinimap(state);
-    },
+    update, showToast, flash, setDialogue, setScreen,
+    onNew: (fn) => btnNew.addEventListener('click', fn),
+    onContinue: (fn) => btnContinue.addEventListener('click', fn),
+    onResume: (fn) => btnResume.addEventListener('click', fn),
+    onRestart: (fn) => btnRestart.addEventListener('click', fn),
   };
 }

@@ -1,123 +1,91 @@
-// Drawing only: the three.js scene, the golden-hour light, the third-person
-// camera rig and the mission beacon. The simulation lives in world.js; this
-// module only turns the world's state into pixels.
-
-import { CITY, PALETTE } from './config.js';
+// Solmar Bay v2 — renderer: the three.js renderer, chase camera and the
+// day/night sky. Owns the camera rig; the world owns the gameplay.
+import { COLOURS } from './config.js';
 
 const THREE = window.THREE;
 
 export function createRenderer(canvas) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.1;
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(PALETTE.sky);
-  scene.fog = new THREE.Fog(PALETTE.fog, 180, 700);
+  scene.background = new THREE.Color(COLOURS.skyDay);
+  scene.fog = new THREE.Fog(COLOURS.skyDay, 120, 520);
 
-  // Golden-hour sun: warm, low, long shadows. A soft hemisphere fill keeps
-  // the shaded sides readable.
-  const sun = new THREE.DirectionalLight(0xffd9a0, 2.4);
-  sun.position.set(-180, 140, -120);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.left = -260;
-  sun.shadow.camera.right = 260;
-  sun.shadow.camera.top = 260;
-  sun.shadow.camera.bottom = -260;
-  sun.shadow.camera.far = 700;
-  scene.add(sun);
-  const hemi = new THREE.HemisphereLight(0x9fc8e8, 0x8a6a4a, 0.9);
+  const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 900);
+  camera.position.set(0, 12, -18);
+
+  const hemi = new THREE.HemisphereLight(0xbfd9ff, 0x3a2f22, 0.9);
   scene.add(hemi);
+  const sun = new THREE.DirectionalLight(COLOURS.sunDay, 1.6);
+  sun.position.set(120, 180, 60);
+  scene.add(sun);
+  const nightLamp = new THREE.PointLight(0xffe9a0, 0, 60);
+  scene.add(nightLamp);
 
-  const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 1200);
-  camera.position.set(0, 10, 20);
-
-  // The mission beacon: a glowing column and a floating diamond over the marker.
-  const beaconMat = new THREE.MeshBasicMaterial({
-    color: PALETTE.marker,
-    transparent: true,
-    opacity: 0.28,
-    depthWrite: false,
-  });
-  const beacon = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.2, 60, 16, 1, true), beaconMat);
-  beacon.visible = false;
-  scene.add(beacon);
-  const diamond = new THREE.Mesh(
-    new THREE.OctahedronGeometry(1.1),
-    new THREE.MeshBasicMaterial({ color: PALETTE.marker }),
-  );
-  diamond.visible = false;
-  scene.add(diamond);
-
-  const view = { camPos: new THREE.Vector3(0, 10, 20), lookAt: new THREE.Vector3() };
-
-  function resize() {
-    const width = window.innerWidth;
-    const height = window.innerHeight;
-    renderer.setSize(width, height, false);
-    camera.aspect = width / height;
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
-  }
-  resize();
-  window.addEventListener('resize', resize);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
 
-  /** Where the camera should sit for the current player state. */
-  function cameraTarget(player) {
-    const onFoot = player.onFoot;
-    const dist = onFoot ? player.camDist : player.camDist + 4;
-    const height = onFoot ? 3.2 : 4.4;
-    const yaw = player.camYaw;
-    const pitch = player.camPitch;
-    // Camera forward is (-sin yaw, -cos yaw); the camera sits behind it.
-    const cx = player.x + Math.sin(yaw) * Math.cos(pitch) * dist;
-    const cz = player.z + Math.cos(yaw) * Math.cos(pitch) * dist;
-    const cy = height + Math.sin(pitch) * dist;
-    const lx = player.x;
-    const lz = player.z;
-    const ly = onFoot ? 1.6 : 1.4;
-    return { cx, cy, cz, lx, ly, lz };
+  // Camera state: yaw/pitch around the target, smoothed.
+  const cam = { yaw: 0, pitch: 0.32, dist: 13, height: 4.2, target: new THREE.Vector3() };
+  const desired = new THREE.Vector3();
+  const lookAt = new THREE.Vector3();
+
+  function updateCamera(dt, target, heading, mode) {
+    // mode: 'foot' | 'car' | 'boat' — car pulls the camera back and lower.
+    const dist = mode === 'car' ? 15 : mode === 'boat' ? 18 : 11;
+    const height = mode === 'car' ? 5.2 : mode === 'boat' ? 7 : 3.6;
+    cam.dist += (dist - cam.dist) * Math.min(1, dt * 3);
+    cam.height += (height - cam.height) * Math.min(1, dt * 3);
+    cam.target.lerp(target, Math.min(1, dt * 10));
+    // Camera yaw eases toward behind the heading when driving.
+    let dy = heading - cam.yaw;
+    while (dy > Math.PI) dy -= Math.PI * 2;
+    while (dy < -Math.PI) dy += Math.PI * 2;
+    cam.yaw += dy * Math.min(1, dt * (mode === 'foot' ? 1.2 : 2.2));
+    desired.set(
+      cam.target.x - Math.sin(cam.yaw) * cam.dist,
+      cam.target.y + cam.height + Math.sin(cam.pitch) * cam.dist * 0.4,
+      cam.target.z - Math.cos(cam.yaw) * cam.dist,
+    );
+    camera.position.lerp(desired, Math.min(1, dt * 8));
+    lookAt.copy(cam.target);
+    lookAt.y += 1.6;
+    camera.lookAt(lookAt);
   }
 
-  return {
-    scene,
-    camera,
-    renderer,
-    /** Paint one frame: ease the camera to its target, move the beacon, render. */
-    draw(state, time) {
-      const player = state.player;
-      // The figure only shows on foot: in a car, the driver sits inside it.
-      player.mesh.group.visible = player.onFoot;
-      const target = cameraTarget(player);
-      const k = 1 - Math.pow(0.0001, 1 / 60);
-      view.camPos.x += (target.cx - view.camPos.x) * k;
-      view.camPos.y += (target.cy - view.camPos.y) * k;
-      view.camPos.z += (target.cz - view.camPos.z) * k;
-      view.lookAt.set(target.lx, target.ly, target.lz);
-      camera.position.copy(view.camPos);
-      camera.lookAt(view.lookAt);
-      if (state.missions.marker) {
-        beacon.visible = true;
-        diamond.visible = true;
-        beacon.position.set(state.missions.marker.x, 30, state.missions.marker.z);
-        diamond.position.set(state.missions.marker.x, 9 + Math.sin(time * 2) * 0.6, state.missions.marker.z);
-        diamond.rotation.y = time * 1.5;
-      } else {
-        beacon.visible = false;
-        diamond.visible = false;
-      }
-      renderer.render(scene, camera);
-    },
-    /** Snap the camera to its target at once (for staged screenshots). */
-    snapCamera(state) {
-      const target = cameraTarget(state.player);
-      view.camPos.set(target.cx, target.cy, target.cz);
-      camera.position.copy(view.camPos);
-      camera.lookAt(target.lx, target.ly, target.lz);
-    },
-  };
+  function addYaw(delta) {
+    cam.yaw += delta;
+  }
+
+  function setYaw(yaw) {
+    cam.yaw = yaw;
+  }
+
+  /** t in [0,1): 0 = dawn, 0.25 = noon, 0.5 = dusk, 0.75 = midnight. */
+  function setDayNight(t) {
+    const day = Math.max(0, Math.sin(t * Math.PI * 2)); // 1 at noon, 0 at night
+    const dusk = Math.max(0, 1 - Math.abs(t - 0.5) * 4); // peaks at dusk
+    const sky = new THREE.Color(COLOURS.skyDay).lerp(new THREE.Color(COLOURS.skyNight), 1 - day);
+    sky.lerp(new THREE.Color(COLOURS.skyDusk), dusk * 0.55);
+    scene.background = sky;
+    scene.fog.color.copy(sky);
+    hemi.intensity = 0.25 + day * 0.65;
+    sun.intensity = 0.15 + day * 1.45;
+    const a = t * Math.PI * 2;
+    sun.position.set(Math.cos(a) * 160, Math.max(20, Math.sin(a) * 180 + 40), Math.sin(a) * 120 + 40);
+    nightLamp.intensity = day < 0.35 ? 1.6 : 0;
+    return day;
+  }
+
+  function render() {
+    renderer.render(scene, camera);
+  }
+
+  return { renderer, scene, camera, cam, updateCamera, addYaw, setYaw, setDayNight, render, nightLamp };
 }

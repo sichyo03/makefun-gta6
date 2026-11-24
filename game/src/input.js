@@ -1,97 +1,129 @@
-// Keyboard and pointer input. Held keys give movement; one-shot presses (confirm,
-// pause, enter car, shoot, mute) are queued as bit flags and taken once by the loop,
-// so a press between two frames is never lost and never counted twice. The mouse
-// drags the camera; a click fires the weapon (on foot) and advances dialogue.
-
+// Solmar Bay v2 — keyboard and mouse input. Tracks held keys, edge-triggered
+// presses (so one key tap is one action), and mouse drag for the camera.
 export const ACTION_CONFIRM = 1;
 export const ACTION_PAUSE = 2;
-export const ACTION_ENTER = 4;
-export const ACTION_SHOOT = 8;
-export const ACTION_MUTE = 16;
-
-const FORWARD = new Set(['KeyW', 'ArrowUp']);
-const BACK = new Set(['KeyS', 'ArrowDown']);
-const LEFT = new Set(['KeyA', 'ArrowLeft']);
-const RIGHT = new Set(['KeyD', 'ArrowRight']);
-const RUN = new Set(['ShiftLeft', 'ShiftRight']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
-const ENTER = new Set(['KeyE']);
-const MUTE = new Set(['KeyM']);
+export const ACTION_INTERACT = 4;
+export const ACTION_RELOAD = 8;
+export const ACTION_RADIO = 16;
+export const ACTION_HORN = 32;
 
 export function createInput(canvas) {
-  const held = new Set();
-  let actions = 0;
-  let mouseDown = false;
-  let lastX = 0;
-  let lastY = 0;
-  let dragX = 0;
-  let dragY = 0;
+  const keys = new Set();
+  const pressed = new Set();
+  const mouse = { down: false, dx: 0, dy: 0, x: 0, y: 0 };
 
-  window.addEventListener('keydown', (event) => {
-    if (FORWARD.has(event.code) || BACK.has(event.code) || LEFT.has(event.code) || RIGHT.has(event.code) || RUN.has(event.code)) {
-      held.add(event.code);
-    } else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else if (ENTER.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_ENTER;
-    } else if (MUTE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_MUTE;
-    } else return;
-    event.preventDefault();
-  });
-  window.addEventListener('keyup', (event) => {
-    held.delete(event.code);
-  });
-  // A key released while the tab is hidden never sends keyup: let go of everything.
-  window.addEventListener('blur', () => {
-    held.clear();
-    mouseDown = false;
-  });
-
-  canvas.addEventListener('pointerdown', (event) => {
-    mouseDown = true;
-    lastX = event.clientX;
-    lastY = event.clientY;
-    actions |= ACTION_SHOOT;
-  });
-  window.addEventListener('pointerup', () => {
-    mouseDown = false;
-  });
-  window.addEventListener('pointermove', (event) => {
-    if (!mouseDown) return;
-    dragX += event.clientX - lastX;
-    dragY += event.clientY - lastY;
-    lastX = event.clientX;
-    lastY = event.clientY;
-  });
-
-  function has(keys) {
-    for (const code of keys) if (held.has(code)) return true;
-    return false;
+  function onKeyDown(event) {
+    if (event.repeat) return;
+    keys.add(event.code);
+    pressed.add(event.code);
+    if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.code)) event.preventDefault();
+  }
+  function onKeyUp(event) {
+    keys.delete(event.code);
+  }
+  function onBlur() {
+    keys.clear();
+  }
+  function onMouseDown(event) {
+    mouse.down = true;
+    mouse.x = event.clientX;
+    mouse.y = event.clientY;
+  }
+  function onMouseMove(event) {
+    if (!mouse.down) return;
+    mouse.dx += event.movementX || 0;
+    mouse.dy += event.movementY || 0;
+    mouse.x = event.clientX;
+    mouse.y = event.clientY;
+  }
+  function onMouseUp() {
+    mouse.down = false;
   }
 
-  return {
-    /** Forward/back and left/right in [-1, 1], and whether the run key is held. */
-    move() {
-      const fwd = (has(FORWARD) ? 1 : 0) - (has(BACK) ? 1 : 0);
-      const strafe = (has(RIGHT) ? 1 : 0) - (has(LEFT) ? 1 : 0);
-      return { fwd, strafe, run: has(RUN) };
-    },
-    /** Camera drag since the last call, in pixels; the caller turns it into radians. */
-    takeDrag() {
-      const taken = { x: dragX, y: dragY };
-      dragX = 0;
-      dragY = 0;
-      return taken;
-    },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
-    takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
-    },
-  };
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
+  window.addEventListener('blur', onBlur);
+  canvas.addEventListener('mousedown', onMouseDown);
+  window.addEventListener('mousemove', onMouseMove);
+  window.addEventListener('mouseup', onMouseUp);
+  canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+
+  function held(code) {
+    return keys.has(code);
+  }
+
+  /** Movement axes in [-1, 1]: x = strafe right, y = forward. */
+  function axes() {
+    let x = 0;
+    let y = 0;
+    if (held('KeyW') || held('ArrowUp')) y += 1;
+    if (held('KeyS') || held('ArrowDown')) y -= 1;
+    if (held('KeyD')) x += 1;
+    if (held('KeyA')) x -= 1;
+    if (held('ArrowLeft')) x -= 1;
+    if (held('ArrowRight')) x += 1;
+    return { x, y };
+  }
+
+  /** Camera yaw input from arrow keys and mouse drag. */
+  function look() {
+    let yaw = 0;
+    if (held('ArrowLeft')) yaw += 1.6;
+    if (held('ArrowRight')) yaw -= 1.6;
+    yaw += mouse.dx * 0.004;
+    mouse.dx = 0;
+    mouse.dy = 0;
+    return yaw;
+  }
+
+  /** Edge-triggered actions since the last call; clears only the action
+   * codes it consumed, so digit presses stay available for takeDigit. */
+  function takeActions() {
+    let actions = 0;
+    if (pressed.has('Enter') || pressed.has('Space')) {
+      actions |= ACTION_CONFIRM;
+      pressed.delete('Enter');
+      pressed.delete('Space');
+    }
+    if (pressed.has('KeyP') || pressed.has('Escape')) {
+      actions |= ACTION_PAUSE;
+      pressed.delete('KeyP');
+      pressed.delete('Escape');
+    }
+    if (pressed.has('KeyE')) { actions |= ACTION_INTERACT; pressed.delete('KeyE'); }
+    if (pressed.has('KeyR')) { actions |= ACTION_RELOAD; pressed.delete('KeyR'); }
+    if (pressed.has('KeyC')) { actions |= ACTION_RADIO; pressed.delete('KeyC'); }
+    if (pressed.has('KeyH')) { actions |= ACTION_HORN; pressed.delete('KeyH'); }
+    return actions;
+  }
+
+  /** A digit key 1..6 pressed since the last call (weapons 1-3, radio 4-6). */
+  function takeDigit() {
+    for (const code of ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6']) {
+      if (pressed.has(code)) {
+        pressed.delete(code);
+        return Number(code.slice(-1));
+      }
+    }
+    return 0;
+  }
+
+  function sprinting() {
+    return held('ShiftLeft') || held('ShiftRight');
+  }
+
+  function firing() {
+    return mouse.down || held('KeyF');
+  }
+
+  function destroy() {
+    window.removeEventListener('keydown', onKeyDown);
+    window.removeEventListener('keyup', onKeyUp);
+    window.removeEventListener('blur', onBlur);
+    canvas.removeEventListener('mousedown', onMouseDown);
+    window.removeEventListener('mousemove', onMouseMove);
+    window.removeEventListener('mouseup', onMouseUp);
+  }
+
+  return { keys, held, axes, look, takeActions, takeDigit, sprinting, firing, mouse, destroy };
 }

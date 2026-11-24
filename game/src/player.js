@@ -1,113 +1,115 @@
-// Dario Venn on foot: a low-poly figure of boxes, WASD movement relative to the
-// camera, a walk-cycle swing on the legs and arms, and a simple pistol pose when
-// the weapon is out. The module owns the figure's mesh and its step.
-
+// Solmar Bay v2 — Dario Venn on foot: third-person movement, sprint, and
+// getting in and out of cars, bikes and boats. The camera yaw is the
+// player's facing when on foot.
 import { PLAYER } from './config.js';
-import { collideCircle } from './city.js';
 
 const THREE = window.THREE;
 
-export function createPlayerMesh() {
+export function createPlayer(scene) {
   const group = new THREE.Group();
-  const skin = new THREE.MeshLambertMaterial({ color: '#c98d64' });
-  const shirt = new THREE.MeshLambertMaterial({ color: PLAYER_SHIRT });
-  const pants = new THREE.MeshLambertMaterial({ color: '#2c3242' });
-  const hair = new THREE.MeshLambertMaterial({ color: '#1e150c' });
-
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.78, 0.36), shirt);
-  torso.position.y = 1.15;
-  group.add(torso);
-  const head = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.42, 0.4), skin);
-  head.position.y = 1.78;
+  // Body: jacket, head, legs — a simple readable figure.
+  const jacket = new THREE.Mesh(
+    new THREE.BoxGeometry(0.9, 1.0, 0.5),
+    new THREE.MeshLambertMaterial({ color: 0x2a6b3a }),
+  );
+  jacket.position.y = 1.15;
+  group.add(jacket);
+  const head = new THREE.Mesh(
+    new THREE.BoxGeometry(0.5, 0.5, 0.5),
+    new THREE.MeshLambertMaterial({ color: 0xd8a078 }),
+  );
+  head.position.y = 1.95;
   group.add(head);
-  const hairTop = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.14, 0.44), hair);
-  hairTop.position.y = 2.0;
-  group.add(hairTop);
-  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.8, 0.28), pants);
-  legL.position.set(-0.17, 0.4, 0);
-  group.add(legL);
-  const legR = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.8, 0.28), pants);
-  legR.position.set(0.17, 0.4, 0);
-  group.add(legR);
-  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.72, 0.24), shirt);
-  armL.position.set(-0.44, 1.18, 0);
-  group.add(armL);
-  const armR = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.72, 0.24), shirt);
-  armR.position.set(0.44, 1.18, 0);
-  group.add(armR);
-  // The pistol: a small dark box in the right hand, shown only when armed.
-  const gun = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.42), new THREE.MeshLambertMaterial({ color: '#14161a' }));
-  gun.position.set(0.44, 0.86, 0.22);
-  gun.visible = false;
-  group.add(gun);
-  group.traverse((m) => {
-    if (m.isMesh) m.castShadow = true;
-  });
-  return { group, legL, legR, armL, armR, gun };
-}
-
-const PLAYER_SHIRT = '#2f7fd0';
-
-/** The player on foot: position, facing, camera yaw and walk phase. */
-export function createPlayer(x, z) {
-  const mesh = createPlayerMesh();
-  mesh.group.position.set(x, 0, z);
+  const legMat = new THREE.MeshLambertMaterial({ color: 0x222831 });
+  for (const sx of [-0.22, 0.22]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.85, 0.36), legMat);
+    leg.position.set(sx, 0.45, 0);
+    leg.name = sx < 0 ? 'legL' : 'legR';
+    group.add(leg);
+  }
+  const armMat = new THREE.MeshLambertMaterial({ color: 0x2a6b3a });
+  for (const sx of [-0.55, 0.55]) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.85, 0.3), armMat);
+    arm.position.set(sx, 1.2, 0);
+    arm.name = sx < 0 ? 'armL' : 'armR';
+    group.add(arm);
+  }
+  scene.add(group);
   return {
-    mesh,
-    x,
-    z,
-    yaw: 0,
-    camYaw: 0,
-    camPitch: 0.32,
-    camDist: 9,
-    health: PLAYER.health,
-    walkPhase: 0,
-    moving: false,
-    armed: false,
+    mesh: group,
+    x: 0,
+    z: 0,
+    heading: 0,
     speed: 0,
+    health: PLAYER.maxHealth,
+    onFoot: true,
+    vehicle: null,
+    walkPhase: 0,
+    visible: true,
   };
 }
 
-/**
- * One step on foot. `move` is { fwd, strafe, run } in camera space; the player
- * turns toward the direction of travel and walks there, pushed out of buildings.
- */
-export function stepPlayer(player, city, move, dt) {
-  const speed = move.run ? PLAYER.runSpeed : PLAYER.walkSpeed;
-  const mag = Math.hypot(move.fwd, move.strafe);
-  player.moving = mag > 0.1;
-  if (player.moving) {
-    const fwdX = -Math.sin(player.camYaw);
-    const fwdZ = -Math.cos(player.camYaw);
-    const rightX = Math.cos(player.camYaw);
-    const rightZ = -Math.sin(player.camYaw);
-    let dx = fwdX * move.fwd + rightX * move.strafe;
-    let dz = fwdZ * move.fwd + rightZ * move.strafe;
-    const len = Math.hypot(dx, dz) || 1;
-    dx /= len;
-    dz /= len;
-    const targetYaw = Math.atan2(dx, dz);
-    let dy = targetYaw - player.yaw;
-    while (dy > Math.PI) dy -= Math.PI * 2;
-    while (dy < -Math.PI) dy += Math.PI * 2;
-    player.yaw += Math.max(-PLAYER.turnSpeed * dt, Math.min(PLAYER.turnSpeed * dt, dy));
-    player.x += dx * speed * dt;
-    player.z += dz * speed * dt;
-    player.speed = speed;
-    player.walkPhase += dt * speed * 1.6;
-  } else {
-    player.speed = 0;
+/** Resolve a circle (x, z, r) against building AABBs; returns corrected x/z. */
+export function collideCircle(x, z, r, colliders) {
+  for (const c of colliders) {
+    const cx = Math.max(c.x - c.hx, Math.min(x, c.x + c.hx));
+    const cz = Math.max(c.z - c.hz, Math.min(z, c.z + c.hz));
+    const dx = x - cx;
+    const dz = z - cz;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < r * r) {
+      if (d2 < 0.0001) {
+        x = c.x + c.hx + r;
+      } else {
+        const d = Math.sqrt(d2);
+        x = cx + (dx / d) * r;
+        z = cz + (dz / d) * r;
+      }
+    }
   }
-  const pushed = collideCircle(city, player.x, player.z, PLAYER.radius);
-  player.x = pushed.x;
-  player.z = pushed.z;
-  // Pose the figure: legs and arms swing with the walk, the gun shows when armed.
-  const swing = player.moving ? Math.sin(player.walkPhase) * 0.55 : 0;
-  player.mesh.legL.rotation.x = swing;
-  player.mesh.legR.rotation.x = -swing;
-  player.mesh.armL.rotation.x = -swing * 0.8;
-  player.mesh.armR.rotation.x = player.armed ? -1.2 : swing * 0.8;
-  player.mesh.gun.visible = player.armed;
-  player.mesh.group.position.set(player.x, 0, player.z);
-  player.mesh.group.rotation.y = player.yaw;
+  return { x, z };
+}
+
+export function updatePlayerOnFoot(player, dt, input, camYaw, colliders, world) {
+  const ax = input.axes();
+  const sprint = input.sprinting();
+  const speed = sprint ? PLAYER.sprintSpeed : PLAYER.walkSpeed;
+  // Movement is relative to the camera yaw.
+  const sin = Math.sin(camYaw);
+  const cos = Math.cos(camYaw);
+  const mx = -ax.x * cos + ax.y * sin;
+  const mz = ax.x * sin + ax.y * cos;
+  const moving = ax.x !== 0 || ax.y !== 0;
+  const targetSpeed = moving ? speed : 0;
+  player.speed += (targetSpeed - player.speed) * Math.min(1, dt * 8);
+  if (moving) {
+    const len = Math.hypot(mx, mz) || 1;
+    player.x += (mx / len) * player.speed * dt;
+    player.z += (mz / len) * player.speed * dt;
+    player.heading = Math.atan2(mx / len, mz / len);
+    player.walkPhase += dt * player.speed * 1.6;
+  }
+  // Keep inside the playable area (city + beach + docks).
+  player.x = Math.max(-245, Math.min(245, player.x));
+  player.z = Math.max(-245, Math.min(295, player.z));
+  const solved = collideCircle(player.x, player.z, PLAYER.radius, colliders);
+  player.x = solved.x;
+  player.z = solved.z;
+  // Pose: face the heading, swing the legs while walking.
+  player.mesh.position.set(player.x, 0, player.z);
+  player.mesh.rotation.y = player.heading;
+  const swing = moving ? Math.sin(player.walkPhase) * 0.5 : 0;
+  const legL = player.mesh.getObjectByName('legL');
+  const legR = player.mesh.getObjectByName('legR');
+  const armL = player.mesh.getObjectByName('armL');
+  const armR = player.mesh.getObjectByName('armR');
+  if (legL) legL.rotation.x = swing;
+  if (legR) legR.rotation.x = -swing;
+  if (armL) armL.rotation.x = -swing * 0.7;
+  if (armR) armR.rotation.x = swing * 0.7;
+  // Aim: when firing, face the camera direction.
+  if (input.firing() && world) {
+    player.heading = camYaw;
+    player.mesh.rotation.y = player.heading;
+  }
 }

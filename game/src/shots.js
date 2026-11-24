@@ -1,160 +1,92 @@
-// The screenshot scenes behind ?shot=cover|street|mission|chase. Each one stages
-// the real world — a driving chase, a street on foot, a mission moment, a police
-// pursuit — lets it settle for a second and a half, and paints it, so the frame
-// is what a short game really looks like. The same seed always gives the same
-// frame. The HUD paints over it exactly as it does in play.
+// Solmar Bay v2 — the four screenshot scenes behind ?shot=cover|street|
+// mission|pursuit. Each stages the real game (a real car, real police, a
+// real mission) and drives it forward with a scripted driver, so every
+// frame is what the game itself looks like; the same seed gives the same
+// frame.
+import { makeVehicle, placeOnRoad } from './vehicles.js';
 
-import { STEP } from './config.js';
-import { createPoliceCar } from './vehicles.js';
-import { startMission, PLACES } from './missions.js';
-import { stepWorld } from './world.js';
+const STEP = 1 / 60;
 
-const SETTLE_STEPS = 90;
-
-function dummyInput() {
-  return {
-    move() {
-      return { fwd: 0, strafe: 0, run: false };
-    },
-    takeDrag() {
-      return { x: 0, y: 0 };
-    },
-    takeActions() {
-      return 0;
-    },
-  };
-}
-
-const silentAudio = {
-  unlock() {},
-  toggleMute() {},
-  setEngine() {},
-  setSiren() {},
-  gunshot() {},
-  pickup() {},
-  crash() {},
-  missionDone() {},
-  busted() {},
-};
-
-function clearPolice(world) {
-  for (let i = world.cars.length - 1; i >= 0; i -= 1) {
-    const car = world.cars[i];
-    if (car.kind === 'police') {
-      world.scene.remove(car.mesh.group);
-      world.cars.splice(i, 1);
-    }
-  }
-}
-
-function addPolice(world, x, z, yaw) {
-  const car = createPoliceCar(x, z, yaw);
-  car.speed = 20;
-  world.cars.push(car);
-  world.scene.add(car.mesh.group);
-  return car;
-}
-
-function putPlayerInCar(world, car, x, z, yaw, speed) {
-  car.x = x;
-  car.z = z;
-  car.yaw = yaw;
-  car.speed = speed;
-  car.mesh.group.position.set(x, 0, z);
-  car.mesh.group.rotation.y = yaw;
+function putPlayerInCar(world, kind, x, z, heading) {
+  const v = makeVehicle(world.scene, kind, x, z, heading);
+  v.driver = 'player';
+  world.vehicles.push(v);
   const p = world.player;
-  p.car = car;
+  p.vehicle = v;
   p.onFoot = false;
-  p.x = x;
-  p.z = z;
-  p.camYaw = yaw + Math.PI;
-  p.camPitch = 0.3;
-  p.camDist = 9;
+  p.mesh.visible = false;
+  return v;
 }
 
-function putPlayerOnFoot(world, x, z, yaw, camYaw) {
+function addChasers(world, n, dist) {
   const p = world.player;
-  if (p.car) {
-    p.car = null;
+  const px = p.vehicle ? p.vehicle.x : p.x;
+  const pz = p.vehicle ? p.vehicle.z : p.z;
+  for (let i = 0; i < n; i += 1) {
+    const a = Math.PI + (i - (n - 1) / 2) * 0.5;
+    const v = makeVehicle(world.scene, 'police', px + Math.sin(a) * dist, pz + Math.cos(a) * dist, a + Math.PI);
+    v.driver = 'police';
+    world.police.cars.push(v);
   }
-  p.onFoot = true;
-  p.x = x;
-  p.z = z;
-  p.yaw = yaw;
-  p.camYaw = camYaw;
-  p.camPitch = 0.3;
-  p.camDist = 9;
-  p.mesh.group.position.set(x, 0, z);
-  p.mesh.group.rotation.y = yaw;
 }
 
-function settle(world, renderer, audio) {
-  // Dialogue freezes the simulation, so park it while the scene settles and
-  // put it back for the frame: the traffic, the police and the car must move.
-  const savedDialogue = world.missions.dialogue;
-  const savedLine = world.missions.dialogueLine;
-  world.missions.dialogue = null;
-  const input = dummyInput();
-  for (let i = 0; i < SETTLE_STEPS; i += 1) {
-    stepWorld(world, input, renderer.camera, audio, STEP);
+// Two police cars parked across the road ahead of the player.
+function placeRoadblock(world, x, z) {
+  for (const [dz, heading] of [[-2.6, 0], [2.6, Math.PI]]) {
+    const v = makeVehicle(world.scene, 'police', x, z + dz, heading);
+    v.driver = 'roadblock';
+    world.vehicles.push(v);
   }
-  world.missions.dialogue = savedDialogue;
-  world.missions.dialogueLine = savedLine;
-  renderer.snapCamera(world);
 }
 
 /**
- * Set the world to the named scene and return the screen to draw over it.
- * Any other name is the cover.
+ * Stage a scene: set the world up, then return how many fixed steps the
+ * runner should play forward with the scripted driver before the shot.
  */
-export function stageShot(name, world, renderer) {
-  const scene = name === 'street' || name === 'mission' || name === 'chase' ? name : 'cover';
-  clearPolice(world);
-  if (scene === 'cover') {
-    startMission(world.missions, 3);
-    world.wanted = 3;
-    world.lastCrimeAt = world.time;
-    // Northbound on the Coral Avenue street, police closing in behind and
-    // one more coming head-on up ahead.
-    putPlayerInCar(world, world.getaway, -32, 160, Math.PI, 22);
-    addPolice(world, -38, 205, Math.PI);
-    addPolice(world, -26, 95, 0);
-    settle(world, renderer, silentAudio);
-    world.getaway.speed = 24;
-    world.player.camYaw = world.getaway.yaw + Math.PI;
-    // The cover shows the chase, not the conversation: hide the dialogue box.
-    world.missions.dialogue = null;
-  } else if (scene === 'street') {
-    startMission(world.missions, 0);
-    world.wanted = 0;
-    putPlayerOnFoot(world, -32, -24, Math.PI, Math.PI);
-    world.player.armed = false;
-    settle(world, renderer, silentAudio);
-  } else if (scene === 'mission') {
-    startMission(world.missions, 0);
-    world.wanted = 0;
-    putPlayerOnFoot(world, PLACES.cafe.x + 6, PLACES.cafe.z + 8, Math.PI * 0.75, Math.PI * 0.85);
-    world.player.armed = false;
-    // Rosa stands just beyond Dario, in the open, so the frame shows them both.
-    world.rosa.x = PLACES.cafe.x + 2;
-    world.rosa.z = PLACES.cafe.z + 14;
-    world.rosa.mesh.group.position.set(world.rosa.x, 0, world.rosa.z);
-    settle(world, renderer, silentAudio);
-  } else {
-    startMission(world.missions, 3);
-    world.wanted = 4;
-    world.lastCrimeAt = world.time;
-    // Eastbound on the Palm Row street, a patrol on the tail and one
-    // alongside, ramming. The docks are the objective, far ahead.
-    putPlayerInCar(world, world.getaway, 0, -32, Math.PI / 2, 26);
-    addPolice(world, -45, -32, Math.PI / 2);
-    addPolice(world, 30, -24, Math.PI / 2);
-    addPolice(world, 60, -40, Math.PI / 2);
-    settle(world, renderer, silentAudio);
-    world.getaway.speed = 28;
-    world.player.camYaw = world.getaway.yaw + Math.PI;
-    world.missions.dialogue = null;
+export function stageShot(name, world, script) {
+  const w = world;
+  script.ax = { x: 0, y: 0 };
+  script.fire = false;
+  if (name === 'street') {
+    w.dayTime = 0.18; // morning sun
+    // South of the cafe, on open ground, facing north toward Mama Rosa.
+    w.player.x = w.city.markers.cafe.x;
+    w.player.z = w.city.markers.cafe.z + 24;
+    w.player.heading = Math.PI;
+    w.player.mesh.position.set(w.player.x, 0, w.player.z);
+    w.missions.state.dialogue.push({ who: 'Mama Rosa', text: 'Dario! My best runner is back. Come, I have work for you.' });
+    w.audio.ensure();
+    return { steps: 150, screen: 'play' };
   }
-  renderer.snapCamera(world);
-  return { screen: 'play' };
+  if (name === 'mission') {
+    w.dayTime = 0.3;
+    const rs = w.city.markers.raceStart;
+    const car = putPlayerInCar(w, 'sport', rs.x, rs.z, Math.PI / 2);
+    car.speed = 12;
+    w.missions.startMission(4); // Street King
+    script.ax = { x: 0, y: 1 };
+    return { steps: 420, screen: 'play' };
+  }
+  if (name === 'pursuit') {
+    w.dayTime = 0.78; // night, lamps on
+    const car = putPlayerInCar(w, 'sport', -60, 138, Math.PI / 2);
+    car.speed = 26;
+    w.police.heat = 4;
+    w.police.wanted = 4;
+    w.police.blockTimer = 0;
+    addChasers(w, 3, 34);
+    script.ax = { x: 0, y: 1 };
+    return { steps: 180, screen: 'play' };
+  }
+  // cover (default): dusk chase, 3 stars, chasers behind and a roadblock ahead.
+  w.dayTime = 0.52; // dusk
+  const car = putPlayerInCar(w, 'sport', -150, 0, Math.PI / 2);
+  car.speed = 24;
+  w.police.heat = 3;
+  w.police.wanted = 3;
+  w.police.blockTimer = 999; // the manual roadblock below is the one in frame
+  placeRoadblock(w, -70, 0);
+  addChasers(w, 2, 30);
+  script.ax = { x: 0, y: 1 };
+  return { steps: 300, screen: 'play' };
 }
